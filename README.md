@@ -1,169 +1,72 @@
-# WinMerge
+# WinMerge &mdash; SVN blame fork
 
-[![logo](Docs/Logos/WinMerge_logo_24bit.png)](https://github.com/WinMerge/winmerge)
+A fork of [WinMerge](https://winmerge.org/) that adds an **SVN blame gutter** to
+the file compare view, so a diff can be read together with who last changed
+each line, when, and in which revision.
 
-[WinMerge](https://winmerge.org/) is an open-source differencing and merging tool for Windows.  
-It compares files and folders and presents differences in a clear, visual format that is easy to understand and work with.  
-WinMerge has been actively developed since 2000.
+## Upstream
 
-[![Build status](https://ci.appveyor.com/api/projects/status/h3v3ap1kswi1tyyt?svg=true)](https://ci.appveyor.com/project/sdottaka/winmerge/build/artifacts)
-[![CI](https://github.com/WinMerge/winmerge/workflows/CI/badge.svg)](https://github.com/WinMerge/winmerge/actions)
-[![sourceforge.net downloads](https://img.shields.io/sourceforge/dt/winmerge)](https://sourceforge.net/projects/winmerge/files/)
-[![GitHub Releases](https://img.shields.io/github/downloads/winmerge/winmerge/total.svg)](https://github.com/WinMerge/winmerge/releases/latest)
-[![Translation status](https://img.shields.io/badge/translations-41-green)](https://github.com/WinMerge/winmerge/blob/master/Translations/TranslationsStatus.md)
+WinMerge is an open source differencing and merging tool for Windows, developed
+since 2000. This repository is a fork of
+[unity3d-kr/winmerge](https://github.com/unity3d-kr/winmerge), which tracks
+[WinMerge/winmerge](https://github.com/WinMerge/winmerge).
 
----
+Everything not described below is unmodified upstream code, and the upstream
+documentation still applies.
 
-## What Can WinMerge Do?
+- Project site: <https://winmerge.org/>
+- Upstream source: <https://github.com/WinMerge/winmerge>
+- License: GPL-2.0, see [LICENSE.md](LICENSE.md)
 
-WinMerge provides a rich set of features for comparing and merging files and folders:
+## What this fork adds
 
-- **File Comparison**  
-  Compare two or three text files side by side, with differences highlighted line by line.  
-  Inline differences within a line can also be shown.
+### Blame gutter
 
-- **Folder Comparison**  
-  Compare the contents of two folders to see which files differ, are missing, or exist only on one side.  
-  Folder comparisons support **advanced filter expressions**, allowing you to include or exclude files and folders based on names, paths, sizes, timestamps, and other attributes.
+Open a file compare and choose **File > SVN Blame...** (also on the toolbar).
+The left pane gains a gutter showing the revision, author and date of every
+line, retrieved with `svn blame --xml` on a worker thread so the view stays
+responsive.
 
-- **Merging**  
-  Merge changes between files or folders by selectively applying differences from one side to the other.
+- **Repository URL** is derived from the working copy when the file is inside
+  one. Files opened from TortoiseSVN's log dialog live in `%TEMP%` and have no
+  working copy, so the URL TortoiseSVN passes with `%burl` is used, and a
+  dropdown next to the field keeps the URLs used before for manual selection.
+- **Peg revision** uses `%brev` or the working copy revision, so blaming a diff
+  opened at an older revision stops there instead of reporting HEAD.
+- **Revision range** can be limited from a given revision to HEAD or to a
+  specific revision.
+- **Diff options** cover `--ignore-eol-style`, the three whitespace modes and
+  `-g` for merge info.
+- **Columns** (revision / author / time) are toggled from the View menu without
+  downloading the blame data again; a tooltip reveals the columns a narrow pane
+  hides.
+- **Cancellation** stops the running `svn` process immediately.
 
-- **Syntax Highlighting**  
-  Syntax highlighting for many programming languages and file formats helps make code and structured text easier to read and compare.
+### Per-author tint
 
-- **Patch File Creation**  
-  Generate patch files in normal, context, or unified diff formats.
+The gutter background is tinted per author so contributions can be told apart
+at a glance.
 
-- **Flexible Ignore Options**  
-  Ignore differences such as whitespace changes, case differences, or lines matching regular expressions.
+- Twelve accent colours are handed out in line-count order, so the busiest
+  contributors get the most distinct tones; the author with the most lines
+  keeps the plain margin colour.
+- Each accent is blended 45% into the current margin colour, so the tint
+  follows whatever colour scheme is active instead of being a fixed colour.
+- The twelve colours are options (`Settings/BlameTintColor0..11`) and can be
+  edited in **Settings > Colors > Text Colors** under *Blame tint*.
+- Shipped schemes carry their own values: neutral accents that land around
+  `#E1E1E1` for light schemes, low chroma greys for dark ones.
 
-- **Shell Integration**  
-  Integrates with Windows Explorer, enabling direct comparison via the right-click context menu.
+## Build
 
-- **Archive Support**  
-  Using 7-Zip, WinMerge can compare files inside many archive formats as if they were normal folders.
-
-In short, WinMerge is useful for anyone who needs to track changes, compare versions of files or directories, or merge modifications efficiently.
-
----
-
-## How to Contribute
-
-If you find a bug or would like to request a feature, please [submit an issue](https://github.com/WinMerge/winmerge/issues).
-
-To contribute code:
-
-1. [Fork the WinMerge repository](https://github.com/WinMerge/winmerge/fork)
-2. Create a feature branch on your fork
-3. Follow the existing coding style (use [Allman indentation](https://en.wikipedia.org/wiki/Indentation_style#Allman_style))
-4. Submit a [Pull Request](https://github.com/WinMerge/winmerge/pulls) describing your changes
-
----
-
-## Folder Structure
-
-The WinMerge repository is organized as follows:
-
-- `ArchiveSupport/Merge7z`  
-  Merge7z DLLs that connect WinMerge with 7-Zip. Required to build `WinMergeU.exe`.  
-  A standalone installer for these DLLs is also included.
-
-- `Build`  
-  Output directory created during compilation. Contains executables, libraries, manuals, etc.
-
-- `BuildTmp`  
-  Temporary files created during compilation. Safe to delete.
-
-- `ColorSchemes`  
-  Color schemes and themes.
-
-- `Docs`  
-  User and developer documentation. Open `Docs/index.html` to browse locally.
-
-- `Externals`  
-  Third-party libraries used by WinMerge (some customized).
-
-- `Filters`  
-  File and folder filter definitions.
-
-- `Installer`  
-  WinMerge installer sources.
-
-- `Plugins`  
-  Runtime plugin DLLs and scripts.
-
-- `ShellExtension`  
-  Windows Explorer shell extension that adds context menu entries.
-
-- `Src`  
-  Main WinMerge source code.
-
-- `Testing`  
-  Test files and scripts, including unit tests based on the  
-  [Google Test Framework](https://github.com/google/googletest).
-
-- `Tools/Scripts`  
-  Various development utilities.
-
-- `Translation`  
-  Language and translation files.
-
-The changelog is available at:  
-[Docs/Users/ChangeLog.md](https://github.com/WinMerge/winmerge/blob/master/Docs/Users/ChangeLog.md)
-
----
-
-## How to Run and Debug
-
-WinMerge provides multiple Visual Studio solution files (`.sln`) for building and debugging.
-
-After running one of the `BuildAll` scripts, you can launch WinMerge from:
-
-Build\X64\Release\WinMergeU.exe
-
-If you built for a different architecture, check the corresponding output folder.
-To debug, you can also start WinMerge normally and attach Visual Studio to the running process.
-
----
-
-## Build WinMerge
-
-### Visual Studio 2017
-
-- Community / Professional / Enterprise
-- VC++ 2017 (v141) toolset
-- Visual C++ MFC and ATL
-- Windows 10 SDK
-- Optional: Windows XP support for C++
-
-### Visual Studio 2022 or later
-
-- Community / Professional / Enterprise
-- MSVC v143 or newer
-- Visual C++ MFC and ATL
-- Windows 10 SDK
-
-### Additional Tools
-
-- git
-- Inno Setup 5.x and 6.x
-- 7-Zip
-- Python
-- Pandoc
-- MSYS2 (including `po4a` and `diffutils`)
-
-## How to Build
+Identical to upstream:
 
 ```bash
-git clone --recurse-submodules https://github.com/WinMerge/winmerge
+git clone --recurse-submodules https://github.com/unity3d-kr/winmerge
 cd winmerge
 DownloadDeps.cmd
 BuildAll.cmd [x86|x64|ARM64]
-# or
-BuildAll.vs2022.cmd [x86|x64|ARM64]
-# or
-BuildAll.vs2017.cmd [x86|x64|ARM|ARM64]
 ```
 
-The manual is maintained in the `Docs/Manual` submodule. Its generated CHM files are downloaded by `DownloadDeps.cmd`; to rebuild them locally, run `BuildManual.cmd`. Before the first manual release is published, run `BuildManual.cmd` before `BuildAll.cmd` to create the CHM files locally.
+Requires Visual Studio 2022 with the MFC/ATL components and a Windows 10 or
+later SDK. The executable is written to `Build\<arch>\Release\WinMergeU.exe`.
