@@ -6,6 +6,7 @@
 
 #include "pch.h"
 #include <vector>
+#include "BlameGutter.h"
 #include "OptionsDef.h"
 #include "OptionsMgr.h"
 #include "OptionsCustomColors.h"
@@ -86,6 +87,12 @@ void Init(COptionsMgr *pOptions)
 	pOptions->InitOption(OPT_VIEW_ZOOM, 1000, 100, 8000);
 	pOptions->InitOption(OPT_LINE_NUMBER_USED_AS_HEADERS, -1);
 	pOptions->InitOption(OPT_DIFF_CONTEXT, (int)-1);
+	pOptions->InitOption(OPT_BLAME_URL_HISTORY, String());
+	pOptions->InitOption(OPT_BLAME_SHOW_REV, true);
+	pOptions->InitOption(OPT_BLAME_SHOW_AUTHOR, true);
+	pOptions->InitOption(OPT_BLAME_SHOW_TIME, true);
+	for (int i = 0; i < BlameTint::COUNT; ++i)
+		pOptions->InitOption(BlameTint::GetOptionName(i), static_cast<int>(BlameTint::GetDefaultColor(i)));
 	pOptions->InitOption(OPT_INVERT_DIFF_CONTEXT, false);
 	pOptions->InitOption(OPT_SPLIT_HORIZONTALLY, false);
 	pOptions->InitOption(OPT_RENDERING_MODE, -1, 0, 6);

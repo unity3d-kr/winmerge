@@ -410,6 +410,12 @@ protected:
 	COutputDoc* m_pOutputDoc;
 	std::vector<std::pair<LogMessage*, bool>> m_logBuffer;
 	CRITICAL_SECTION m_cs;
+	HBITMAP m_hBlameMenuBitmap = nullptr; /**< Icon shown beside "SVN Blame" in the File menu. */
+
+// Menu helpers
+protected:
+	HBITMAP GetBlameMenuBitmap();
+	void ApplyBlameMenuBitmap(CMenu* pPopupMenu);
 
 // Generated message map functions
 protected:

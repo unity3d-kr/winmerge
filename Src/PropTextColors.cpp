@@ -39,6 +39,8 @@ void PropTextColors::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_SELECTION_BKGD_COLOR, m_btnSelectionBackground);
 	DDX_Control(pDX, IDC_SELECTION_TEXT_COLOR, m_btnSelectionText);
 	DDX_Control(pDX, IDC_MARGIN_BKGD_COLOR, m_btnMarginBackground);
+	for (int i = 0; i < BlameTint::COUNT; ++i)
+		DDX_Control(pDX, IDC_BLAME_TINT_COLOR0 + i, m_btnBlameTint[i]);
 	//}}AFX_DATA_MAP
 	EnableColorButtons(m_bCustomColors);
 }
@@ -53,6 +55,8 @@ BEGIN_MESSAGE_MAP(PropTextColors, OptionsPanel)
 	ON_BN_CLICKED(IDC_SELECTION_BKGD_COLOR, OnSelectionBackgroundColor)
 	ON_BN_CLICKED(IDC_SELECTION_TEXT_COLOR, OnSelectionTextColor)
 	ON_BN_CLICKED(IDC_MARGIN_BKGD_COLOR, OnMarginBackgroundColor)
+	// The gutter slots share one handler; the button id selects the slot.
+	ON_CONTROL_RANGE(BN_CLICKED, IDC_BLAME_TINT_COLOR0, IDC_BLAME_TINT_COLOR6, OnBlameTintColor)
 	//}}AFX_MSG_MAP
 END_MESSAGE_MAP()
 
@@ -64,6 +68,9 @@ void PropTextColors::ReadOptions()
 {
 	m_bCustomColors = GetOptionsMgr()->GetBool(OPT_CLR_DEFAULT_TEXT_COLORING) ? false : true;
 	SerializeColorsToFromScreen(LOAD_COLORS);
+
+	for (int i = 0; i < BlameTint::COUNT; ++i)
+		m_btnBlameTint[i].SetColor(BlameTint::GetColor(i));
 }
 
 /** 
@@ -80,6 +87,13 @@ void PropTextColors::WriteOptions()
 
 	// Also, CPropSyntaxColors writes m_pTempColors out, so we don't have to
 	// We share m_pTempColors with CPropSyntaxColors
+
+	// The gutter tints are plain options rather than entries in the syntax
+	// colour table, so they are written here.  Browsing only updates the
+	// buttons, which keeps Cancel free of side effects.
+	for (int i = 0; i < BlameTint::COUNT; ++i)
+		GetOptionsMgr()->SaveOption(BlameTint::GetOptionName(i),
+			static_cast<int>(m_btnBlameTint[i].GetColor()));
 }
 
 /** 
@@ -153,6 +167,36 @@ void PropTextColors::OnSelectionTextColor()
 void PropTextColors::OnMarginBackgroundColor() 
 {
 	BrowseColorAndSave(m_btnMarginBackground, COLORINDEX_SELMARGIN);
+}
+
+/**
+ * @brief Pick the colour of one blame gutter slot.
+ *
+ * These are independent of the "use customized text colors" switch: the
+ * gutter tint is not a system color, so it stays editable even when the text
+ * colors follow the Windows theme.
+ */
+void PropTextColors::BrowseBlameTintColor(int index)
+{
+	if (index < 0 || index >= BlameTint::COUNT)
+		return;
+
+	CColorButton& button = m_btnBlameTint[index];
+	CMyColorDialog dialog(button.GetColor());
+	Options::CustomColors::Load(GetOptionsMgr(), m_cCustColors.data());
+	dialog.m_cc.lpCustColors = m_cCustColors.data();
+
+	if (dialog.DoModal() == IDOK)
+		button.SetColor(dialog.GetColor());
+	Options::CustomColors::Save(GetOptionsMgr(), m_cCustColors.data());
+}
+
+/**
+ * @brief User wants to change one of the blame gutter tint colors.
+ */
+void PropTextColors::OnBlameTintColor(UINT nID)
+{
+	BrowseBlameTintColor(static_cast<int>(nID - IDC_BLAME_TINT_COLOR0));
 }
 
 /**

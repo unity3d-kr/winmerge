@@ -107,6 +107,25 @@ inline const String OPT_VIEW_TOPMARGIN_TABLE {_T("Settings/ViewTopMarginTable"s)
 inline const String OPT_VIEW_ZOOM {_T("Settings/ViewZoom"s)};
 inline const String OPT_LINE_NUMBER_USED_AS_HEADERS {_T("Settings/LineNumberUsedAsHeaders"s)};
 inline const String OPT_DIFF_CONTEXT {_T("Settings/DiffContextV2"s)};
+inline const String OPT_BLAME_URL_HISTORY {_T("Settings/BlameUrlHistory"s)};
+inline const String OPT_BLAME_SHOW_REV {_T("Settings/BlameShowRevision"s)};
+inline const String OPT_BLAME_SHOW_AUTHOR {_T("Settings/BlameShowAuthor"s)};
+inline const String OPT_BLAME_SHOW_TIME {_T("Settings/BlameShowTime"s)};
+
+// SVN blame gutter: accent colours mixed into the background per author.
+// Colour schemes override them, so a dark scheme can ship its own set.
+inline const String OPT_BLAME_TINT_COLOR0 {_T("Settings/BlameTintColor0"s)};
+inline const String OPT_BLAME_TINT_COLOR1 {_T("Settings/BlameTintColor1"s)};
+inline const String OPT_BLAME_TINT_COLOR2 {_T("Settings/BlameTintColor2"s)};
+inline const String OPT_BLAME_TINT_COLOR3 {_T("Settings/BlameTintColor3"s)};
+inline const String OPT_BLAME_TINT_COLOR4 {_T("Settings/BlameTintColor4"s)};
+inline const String OPT_BLAME_TINT_COLOR5 {_T("Settings/BlameTintColor5"s)};
+inline const String OPT_BLAME_TINT_COLOR6 {_T("Settings/BlameTintColor6"s)};
+inline const String OPT_BLAME_TINT_COLOR7 {_T("Settings/BlameTintColor7"s)};
+inline const String OPT_BLAME_TINT_COLOR8 {_T("Settings/BlameTintColor8"s)};
+inline const String OPT_BLAME_TINT_COLOR9 {_T("Settings/BlameTintColor9"s)};
+inline const String OPT_BLAME_TINT_COLOR10 {_T("Settings/BlameTintColor10"s)};
+inline const String OPT_BLAME_TINT_COLOR11 {_T("Settings/BlameTintColor11"s)};
 inline const String OPT_INVERT_DIFF_CONTEXT {_T("Settings/InvertDiffContext"s)};
 
 inline const String OPT_EXT_EDITOR_CMD {_T("Settings/ExternalEditor"s)};

@@ -117,6 +117,14 @@ public:
 	String m_sMiddleDesc; /**< Middle side file's description. */
 	String m_sRightDesc; /**< Right side file's description. */
 
+	/** Repository URL of the left file, passed as -burl <url> so SVN blame can
+	 *  work on files that live outside a working copy (log dialog diffs). */
+	String m_sLeftBlameUrl;
+
+	/** Revision shown in the left pane, passed as -brev <rev>. SVN blame stops
+	 *  at this revision so the authors match the visible file state. */
+	int m_nLeftBlameRevision = 0;
+
 	String m_sFileFilter; /**< File filter mask. */
 	String m_sPreDiffer; /**< Pre-differ name. */
 	String m_sUnpacker; /**< Unpacker name. */

@@ -30,6 +30,9 @@ constexpr unsigned FLAG_RESCAN_WAITS_FOR_IDLE = 1;
 #include "edtlib.h"
 #include "GhostTextView.h"
 #include "OptionsDiffColors.h"
+#include "BlameGutter.h"
+
+#include <memory>
 #include "ISyntaxParser.h"
 #include <map>
 #include <vector>
@@ -97,6 +100,30 @@ private:
 	int m_nClickedColumn;
 
 	std::shared_ptr<LangServices::ISyntaxParser> m_pTreeSitterParser;
+
+	/** @brief Blame data of this pane, or null when the gutter is hidden. */
+	std::shared_ptr<CBlameResult> m_pBlame;
+	/** @brief Column widths in characters, derived from the loaded blame data. */
+	int m_nBlameRevChars = 0;
+	int m_nBlameAuthorChars = 0;
+	int m_nBlameTimeChars = 0;
+	/** @brief Pixels the splitter was moved to make room for the gutter. */
+	int m_nBlamePaneShift = 0;
+	/** @brief Tooltip that reveals the columns the gutter hides. */
+	CToolTipCtrl m_blameTip;
+	/** @brief Row the tooltip currently describes, -1 when outside the gutter. */
+	int m_nBlameTipLine = -1;
+	/** @brief Blank characters kept free at the left edge of the gutter. */
+	static constexpr int BLAME_PADDING_CHARS = 1;
+	/** @brief Author that gets the plain gutter colour, the busiest one. */
+	std::wstring m_blamePlainAuthor;
+	/** @brief Accent index per author, keyed by the case folded author name. */
+	std::map<std::wstring, int> m_blameTints;
+
+	/** @brief Rebuild the author to accent mapping from the loaded blame data. */
+	void UpdateBlameTints();
+	/** @brief Background colour of the gutter for one author. */
+	CEColor GetBlameBackColor(const std::wstring& author) const;
 
 // Attributes
 public:
@@ -180,6 +207,29 @@ public:
 	void SetSelection(const CEPoint& ptStart, const CEPoint& ptEnd, bool bUpdateView = true) override;
 	void ScrollToSubLine(int nNewTopLine, bool bNoSmoothScroll = false, bool bTrackScrollBar = true) override;
 	void SetActivePane();
+
+	// SVN blame gutter. Blame is only ever shown in the first (left) pane.
+	/** @brief Ask for options and fetch blame data, or hide it when shown. */
+	void ToggleBlame();
+	/** @brief Drop blame data and reclaim the gutter space. */
+	void ClearBlame();
+	bool IsBlameVisible() const { return m_pBlame != nullptr; }
+	/** @brief Total gutter width in characters, see the .cpp for the layout. */
+	int GetBlameColumnChars() const;
+	/** @brief Recompute the gutter width and relayout the view. */
+	void UpdateBlameLayout();
+	/** @brief Show or hide one gutter column (0 revision, 1 author, 2 date/time). */
+	void SetBlameColumnVisible(int column, bool visible);
+	/** @brief Tell whether one gutter column is shown (0 revision, 1 author, 2 date/time). */
+	bool IsBlameColumnVisible(int column) const;
+	/** @brief Buffer line under a client point, or -1. Used by the tooltip. */
+	int BlameLineFromPoint(CPoint point);
+	/** @brief Make the tooltip cover the gutter and describe the row under the cursor. */
+	void UpdateBlameTooltip(CPoint point);
+	/** @brief Move the pane splitter so the gutter takes width from both panes. */
+	void SyncBlamePaneShift(int blameWidth);
+	virtual int GetMarginWidth(CDC* pdc = nullptr) override;
+	virtual void DrawMargin(const CRect& rect, int nLineIndex, int nLineNumber) override;
 
 	// Overrides
 	// ClassWizard generated virtual function overrides
@@ -364,6 +414,10 @@ protected:
 	afx_msg void OnHelp();
 	afx_msg void OnViewMargin();
 	afx_msg void OnUpdateViewMargin(CCmdUI* pCmdUI);
+	afx_msg void OnViewBlame();
+	afx_msg void OnUpdateViewBlame(CCmdUI* pCmdUI);
+	afx_msg void OnViewBlameColumn(UINT nID);
+	afx_msg void OnUpdateViewBlameColumn(CCmdUI* pCmdUI);
 	afx_msg void OnViewTopMargin();
 	afx_msg void OnUpdateViewTopMargin(CCmdUI* pCmdUI);
 	afx_msg void OnUseFirstLineAsHeaders();

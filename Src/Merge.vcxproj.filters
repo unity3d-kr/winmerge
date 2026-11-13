@@ -600,6 +600,12 @@
     <ClCompile Include="GhostTextBuffer.cpp">
       <Filter>MFCGui\MDIChild\TextTableCompare\Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="BlameDlg.cpp">
+      <Filter>MFCGui\MDIChild\TextTableCompare\Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="BlameGutter.cpp">
+      <Filter>MFCGui\MDIChild\TextTableCompare\Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="GhostTextView.cpp">
       <Filter>MFCGui\MDIChild\TextTableCompare\Source Files</Filter>
     </ClCompile>
@@ -1449,6 +1455,12 @@
       <Filter>MFCGui\MDIChild\TextTableCompare\Header Files</Filter>
     </ClInclude>
     <ClInclude Include="GhostTextBuffer.h">
+      <Filter>MFCGui\MDIChild\TextTableCompare\Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="BlameDlg.h">
+      <Filter>MFCGui\MDIChild\TextTableCompare\Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="BlameGutter.h">
       <Filter>MFCGui\MDIChild\TextTableCompare\Header Files</Filter>
     </ClInclude>
     <ClInclude Include="GhostTextView.h">

@@ -242,6 +242,39 @@ void MergeCmdLineInfo::ParseWinMergeCmdLine(const tchar_t *q)
 			// -dl "desc" - description for left file
 			q = EatParam(q, m_sLeftDesc);
 		}
+		else if (param == _T("burl"))
+		{
+			// -burl "url" - repository URL of the left file (SVN blame).
+			// The value must be a separate token: EatParam() cuts a token at its
+			// last colon, which would truncate any URL. The token is only taken
+			// when it really looks like a URL, so an empty %burl leaves the file
+			// arguments untouched.
+			String value;
+			const tchar_t *next = EatParam(q, value);
+			// %burl (as opposed to %nqburl) arrives wrapped in quotes.
+			while (!value.empty() && (value.front() == _T('"') || value.front() == _T('\'')))
+				value.erase(value.begin());
+			while (!value.empty() && (value.back() == _T('"') || value.back() == _T('\'')))
+				value.erase(value.size() - 1);
+			if (value.find(_T("://")) != String::npos)
+			{
+				m_sLeftBlameUrl = value;
+				q = next;
+			}
+		}
+		else if (param == _T("brev"))
+		{
+			// -brev "rev" - revision shown in the left pane (SVN blame).
+			// Blame must stop at this revision instead of HEAD. Taken only when
+			// the token is a number, for the same reason as -burl above.
+			String value;
+			const tchar_t *next = EatParam(q, value);
+			if (!value.empty() && value.find_first_not_of(_T("0123456789")) == String::npos)
+			{
+				m_nLeftBlameRevision = _wtoi(value.c_str());
+				q = next;
+			}
+		}
 		else if (param == _T("dm"))
 		{
 			// -dr "desc" - description for middle file

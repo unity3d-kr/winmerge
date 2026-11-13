@@ -227,7 +227,7 @@ protected :
     void UpdateCaret ();
     void SetAnchor (const CEPoint & ptNewAnchor);
     int GetTopMarginHeight ();
-    int GetMarginWidth (CDC *pdc = nullptr);
+    virtual int GetMarginWidth (CDC *pdc = nullptr);
     bool IsValidTextPos (const CEPoint &point);
     bool IsValidTextPosX (const CEPoint &point);
     bool IsValidTextPosY (const CEPoint &point);

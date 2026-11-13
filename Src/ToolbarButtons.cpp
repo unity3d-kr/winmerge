@@ -20,7 +20,8 @@ static constexpr UINT g_toolbarImageOrder[] =
 	ID_FIRSTFILE, ID_PREVFILE, ID_NEXTFILE, ID_LASTFILE,
 	ID_OPTIONS, ID_REFRESH,
 	ID_MERGE_RESULT_CHOOSE_1ST, ID_MERGE_RESULT_CHOOSE_2ND,
-	ID_MERGE_RESULT_CHOOSE_3RD
+	ID_MERGE_RESULT_CHOOSE_3RD,
+	ID_VIEW_BLAME
 };
 
 static constexpr int TOOLBAR_IMAGE_COUNT = static_cast<int>(std::size(g_toolbarImageOrder));
@@ -291,7 +292,17 @@ std::vector<UINT> GetToolbarButtons(FRAMETYPE frameType, int nFiles, bool hasDir
 		toolbarIcons = g_toolbarEmpty;
 		toolbarIconCount = _countof(g_toolbarEmpty);
 	}
-	return std::vector<UINT>(toolbarIcons, toolbarIcons + toolbarIconCount);
+	std::vector<UINT> buttons(toolbarIcons, toolbarIcons + toolbarIconCount);
+
+	// SVN blame only applies to a text file compare, so it is appended here
+	// instead of being repeated in every file compare toolbar layout.
+	if (frameType == FRAME_FILE)
+	{
+		buttons.push_back(0);
+		buttons.push_back(ID_VIEW_BLAME);
+	}
+
+	return buttons;
 }
 
 int GetToolbarImageIndex(UINT nID)

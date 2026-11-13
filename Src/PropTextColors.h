@@ -8,6 +8,7 @@
 
 #include "ColorButton.h"
 #include "OptionsPanel.h"
+#include "BlameGutter.h"
 #include <array>
 
 class COptionsMgr;
@@ -40,6 +41,8 @@ private:
 	CColorButton    m_btnSelectionBackground;
 	CColorButton    m_btnSelectionText;
 	CColorButton    m_btnMarginBackground;
+	/** @brief Accent colours the blame gutter uses per author. */
+	CColorButton    m_btnBlameTint[BlameTint::COUNT];
 	bool            m_bCustomColors;
 	//}}AFX_DATA
 
@@ -56,6 +59,8 @@ protected:
 	typedef enum { SET_DEFAULTS, READ_OPTIONS, LOAD_COLORS } OPERATION;
 
 	void BrowseColorAndSave(CColorButton & colorButton, int colorIndex);
+	/** @brief Pick a colour for one blame gutter slot; saved on OK. */
+	void BrowseBlameTintColor(int index);
 	void SerializeColorsToFromScreen(OPERATION op);
 	void SerializeColorToFromScreen(OPERATION op, CColorButton & btn, int colorIndex);
 	void EnableColorButtons(bool bEnable);
@@ -68,6 +73,7 @@ protected:
 	afx_msg void OnSelectionBackgroundColor();
 	afx_msg void OnSelectionTextColor();
 	afx_msg void OnMarginBackgroundColor();
+	afx_msg void OnBlameTintColor(UINT nID);
 	afx_msg void OnDefaultsStandardColors();
 	//}}AFX_MSG
 	DECLARE_MESSAGE_MAP()

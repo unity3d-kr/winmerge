@@ -446,6 +446,11 @@ CMainFrame::~CMainFrame()
 {
 	if (m_hIconPlugin)
 		DestroyIcon(m_hIconPlugin);
+	if (m_hBlameMenuBitmap != nullptr)
+	{
+		DeleteObject(m_hBlameMenuBitmap);
+		m_hBlameMenuBitmap = nullptr;
+	}
 	GetOptionsMgr()->SaveOption(OPT_TABBAR_AUTO_MAXWIDTH, m_wndTabBar.GetAutoMaxWidth());
 	strdiff::Close();
 }
@@ -802,6 +807,150 @@ LRESULT CMainFrame::OnMenuChar(UINT nChar, UINT nFlags,
 	return lresult;
 }
 
+namespace
+{
+	/**
+	 * @brief Make sure GDI+ is running, since the toolbar sprite is decoded with it.
+	 *
+	 * GDI+ startup is reference counted, so this is harmless when another part of
+	 * the application (BCMenu) already started it.
+	 */
+	bool EnsureGdiplusStarted()
+	{
+		static const bool started = []()
+		{
+			Gdiplus::GdiplusStartupInput input;
+			ULONG_PTR token = 0;
+			return Gdiplus::GdiplusStartup(&token, &input, nullptr) == Gdiplus::Ok;
+		}();
+		return started;
+	}
+
+	/**
+	 * @brief Build a menu sized, alpha blended copy of one toolbar sprite image.
+	 * @param [in] imageIndex Index of the image inside the sprite strip.
+	 * @param [in] imageCount Number of images the strip holds.
+	 * @param [in] width Requested bitmap width in pixels.
+	 * @param [in] height Requested bitmap height in pixels.
+	 * @return Bitmap suitable for MENUITEMINFO::hbmpItem, or nullptr on failure.
+	 */
+	HBITMAP CreateMenuBitmapFromToolbarSprite(int imageIndex, int imageCount, int width, int height)
+	{
+		if (imageIndex < 0 || imageCount <= 0 || width <= 0 || height <= 0)
+			return nullptr;
+		if (!EnsureGdiplusStarted())
+			return nullptr;
+
+		HINSTANCE instance = AfxGetInstanceHandle();
+		HRSRC resource = FindResource(instance, MAKEINTRESOURCE(IDR_TOOLBAR_ENABLED32_PNG), _T("IMAGE"));
+		if (resource == nullptr)
+			return nullptr;
+		HGLOBAL resourceData = LoadResource(instance, resource);
+		if (resourceData == nullptr)
+			return nullptr;
+		const BYTE* resourceBytes = static_cast<const BYTE*>(LockResource(resourceData));
+		if (resourceBytes == nullptr)
+			return nullptr;
+		IStream* stream = SHCreateMemStream(resourceBytes, SizeofResource(instance, resource));
+		if (stream == nullptr)
+			return nullptr;
+		Gdiplus::Bitmap sprite(stream);
+		stream->Release();
+		if (sprite.GetLastStatus() != Gdiplus::Ok)
+			return nullptr;
+
+		const int spriteWidth = static_cast<int>(sprite.GetWidth());
+		const int spriteHeight = static_cast<int>(sprite.GetHeight());
+		const int cellWidth = spriteWidth / imageCount;
+		if (cellWidth <= 0 || (imageIndex + 1) * cellWidth > spriteWidth)
+			return nullptr;
+
+		const int stride = width * 4;
+		std::vector<BYTE> pixels(static_cast<size_t>(stride) * height);
+		{
+			Gdiplus::Bitmap scaled(width, height, stride, PixelFormat32bppARGB, pixels.data());
+			Gdiplus::Graphics graphics(&scaled);
+			graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+			graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+			graphics.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
+			graphics.DrawImage(&sprite, Gdiplus::Rect(0, 0, width, height),
+				imageIndex * cellWidth, 0, cellWidth, spriteHeight, Gdiplus::UnitPixel);
+		}
+
+		// hbmpItem is blended with AlphaBlend(), which expects premultiplied
+		// colours, so the straight alpha GDI+ produced is premultiplied here.
+		for (size_t i = 0; i + 3 < pixels.size(); i += 4)
+		{
+			const BYTE alpha = pixels[i + 3];
+			for (size_t channel = 0; channel < 3; ++channel)
+				pixels[i + channel] = static_cast<BYTE>(pixels[i + channel] * alpha / 255);
+		}
+
+		BITMAPINFO bmi{};
+		bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+		bmi.bmiHeader.biWidth = width;
+		bmi.bmiHeader.biHeight = -height; // Top-down
+		bmi.bmiHeader.biPlanes = 1;
+		bmi.bmiHeader.biBitCount = 32;
+		bmi.bmiHeader.biCompression = BI_RGB;
+		void* bits = nullptr;
+		HBITMAP bitmap = CreateDIBSection(nullptr, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+		if (bitmap == nullptr || bits == nullptr)
+		{
+			if (bitmap != nullptr)
+				DeleteObject(bitmap);
+			return nullptr;
+		}
+		memcpy(bits, pixels.data(), pixels.size());
+		return bitmap;
+	}
+}
+
+/**
+ * @brief Get the icon drawn beside the "SVN Blame" menu item.
+ *
+ * The glyph is taken from the toolbar sprite so the menu entry and the toolbar
+ * button show the same image. The bitmap is created once and then reused.
+ */
+HBITMAP CMainFrame::GetBlameMenuBitmap()
+{
+	if (m_hBlameMenuBitmap != nullptr)
+		return m_hBlameMenuBitmap;
+
+	int size = GetSystemMetrics(SM_CXMENUCHECK);
+	if (size <= 0)
+		size = 16;
+	m_hBlameMenuBitmap = CreateMenuBitmapFromToolbarSprite(
+		ToolbarButtons::GetToolbarImageIndex(ID_VIEW_BLAME),
+		ToolbarButtons::GetToolbarImageCount(), size, size);
+	return m_hBlameMenuBitmap;
+}
+
+/**
+ * @brief Attach the blame icon to the "SVN Blame" item of a popup menu.
+ *
+ * The menu is rebuilt when the active document type changes, so the icon is
+ * attached again each time a popup opens. Popups without the command are left
+ * alone, which makes this cheap to call for every popup.
+ */
+void CMainFrame::ApplyBlameMenuBitmap(CMenu* pPopupMenu)
+{
+	if (pPopupMenu == nullptr || pPopupMenu->m_hMenu == nullptr)
+		return;
+	if (pPopupMenu->GetMenuState(ID_VIEW_BLAME, MF_BYCOMMAND) == static_cast<UINT>(-1))
+		return;
+
+	HBITMAP bitmap = GetBlameMenuBitmap();
+	if (bitmap == nullptr)
+		return;
+
+	MENUITEMINFO itemInfo{};
+	itemInfo.cbSize = sizeof(itemInfo);
+	itemInfo.fMask = MIIM_BITMAP;
+	itemInfo.hbmpItem = bitmap;
+	pPopupMenu->SetMenuItemInfo(ID_VIEW_BLAME, &itemInfo, FALSE);
+}
+
 /**
  * @brief This handler updates the menus from time to time.
  */
@@ -809,6 +958,8 @@ void CMainFrame::OnInitMenuPopup(CMenu* pPopupMenu, UINT nIndex, BOOL bSysMenu)
 {
 	if (!bSysMenu)
 	{
+		ApplyBlameMenuBitmap(pPopupMenu);
+
 		if (IMergeDoc* pMergeDoc = GetActiveIMergeDoc())
 		{
 			PathContext paths;

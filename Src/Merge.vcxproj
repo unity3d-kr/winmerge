@@ -1286,6 +1286,8 @@
       <PrecompiledHeaderOutputFile>$(IntDir)$(TargetName)2.pch</PrecompiledHeaderOutputFile>
     </ClCompile>
     <ClCompile Include="GhostTextBuffer.cpp" />
+    <ClCompile Include="BlameDlg.cpp" />
+    <ClCompile Include="BlameGutter.cpp" />
     <ClCompile Include="GhostTextView.cpp" />
     <ClCompile Include="HexMergeDoc.cpp" />
     <ClCompile Include="HexMergeFrm.cpp" />
@@ -1698,6 +1700,8 @@
     <ClInclude Include="FilterList.h" />
     <ClInclude Include="FolderCmp.h" />
     <ClInclude Include="GhostTextBuffer.h" />
+    <ClInclude Include="BlameDlg.h" />
+    <ClInclude Include="BlameGutter.h" />
     <ClInclude Include="GhostTextView.h" />
     <ClInclude Include="HexMergeDoc.h" />
     <ClInclude Include="HexMergeFrm.h" />

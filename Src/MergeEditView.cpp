@@ -38,10 +38,12 @@
 #include "PluginMenu.h"
 #include "SplitterPositions.h"
 #include "MergeResultView.h"
+#include "BlameDlg.h"
 #include "MergeResultTextBuffer.h"
 #include "MergeDiffNavigation.h"
 #include "MergeConflictNavigation.h"
 #include "Common/PopupList.h"
+#include "Common/SplitterWndEx.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -137,6 +139,10 @@ BEGIN_MESSAGE_MAP(CMergeEditView, CGhostTextView)
 	ON_UPDATE_COMMAND_UI(ID_VIEW_EOL, OnUpdateViewEOL)
 	ON_COMMAND(ID_VIEW_SELMARGIN, OnViewMargin)
 	ON_UPDATE_COMMAND_UI(ID_VIEW_SELMARGIN, OnUpdateViewMargin)
+	ON_COMMAND(ID_VIEW_BLAME, OnViewBlame)
+	ON_UPDATE_COMMAND_UI(ID_VIEW_BLAME, OnUpdateViewBlame)
+	ON_COMMAND_RANGE(ID_VIEW_BLAME_REV, ID_VIEW_BLAME_TIME, OnViewBlameColumn)
+	ON_UPDATE_COMMAND_UI_RANGE(ID_VIEW_BLAME_REV, ID_VIEW_BLAME_TIME, OnUpdateViewBlameColumn)
 	ON_COMMAND(ID_VIEW_TOPMARGIN, OnViewTopMargin)
 	ON_UPDATE_COMMAND_UI(ID_VIEW_TOPMARGIN, OnUpdateViewTopMargin)
 	ON_UPDATE_COMMAND_UI(ID_VIEW_CHANGESCHEME, OnUpdateViewChangeScheme)
@@ -2561,6 +2567,17 @@ bool CMergeEditView::MergeModeKeyDown(MSG* pMsg)
  */
 BOOL CMergeEditView::PreTranslateMessage(MSG* pMsg)
 {
+	if (pMsg->message == WM_MOUSEMOVE && m_blameTip.m_hWnd != nullptr)
+	{
+		const bool wasInGutter = (m_nBlameTipLine >= 0);
+		CPoint point(pMsg->pt);
+		ScreenToClient(&point);
+		UpdateBlameTooltip(point);
+		if (wasInGutter && m_nBlameTipLine < 0)
+			m_blameTip.Pop();
+		m_blameTip.RelayEvent(pMsg);
+	}
+
 	if (pMsg->message == WM_KEYDOWN)
 	{
 		// If we are in merging mode (merge with cursor keys)
@@ -3455,6 +3472,11 @@ void CMergeEditView::RefreshOptions()
 		GetDocument()->IsMixedEOL(m_nThisPane));
 
 	Options::DiffColors::Load(GetOptionsMgr(), m_cachedColors);
+
+	// The gutter tint colours are options too, and a colour scheme change
+	// rewrites them, so the bands have to be recomputed and repainted.
+	if (m_pBlame != nullptr)
+		UpdateBlameLayout();
 }
 
 void CMergeEditView::OnScripts(UINT nID)
@@ -4188,6 +4210,712 @@ void CMergeEditView::OnUpdateViewMargin(CCmdUI* pCmdUI)
 	pCmdUI->Enable(true);
 	pCmdUI->SetCheck(GetOptionsMgr()->GetBool(OPT_VIEW_FILEMARGIN));
 }
+
+/**
+ * @brief Number of characters reserved by the blame gutter.
+ *
+ * One character of left padding, then each visible column followed by a
+ * separating space.
+ */
+int CMergeEditView::GetBlameColumnChars() const
+{
+	int chars = BLAME_PADDING_CHARS;
+	if (IsBlameColumnVisible(0))
+		chars += m_nBlameRevChars + 1;
+	if (IsBlameColumnVisible(1))
+		chars += m_nBlameAuthorChars + 1;
+	if (IsBlameColumnVisible(2))
+		chars += m_nBlameTimeChars + 1;
+	return chars;
+}
+
+/** @brief Tell whether one gutter column is shown (0 revision, 1 author, 2 date/time). */
+bool CMergeEditView::IsBlameColumnVisible(int column) const
+{
+	switch (column)
+	{
+	case 0: return GetOptionsMgr()->GetBool(OPT_BLAME_SHOW_REV);
+	case 1: return GetOptionsMgr()->GetBool(OPT_BLAME_SHOW_AUTHOR);
+	case 2: return GetOptionsMgr()->GetBool(OPT_BLAME_SHOW_TIME);
+	default: return false;
+	}
+}
+
+/**
+ * @brief Show or hide one gutter column and relayout immediately.
+ *
+ * Hiding a column is a pure layout change, so the already fetched blame data is
+ * kept; the user does not have to download it again.
+ */
+void CMergeEditView::SetBlameColumnVisible(int column, bool visible)
+{
+	switch (column)
+	{
+	case 0: GetOptionsMgr()->SaveOption(OPT_BLAME_SHOW_REV, visible); break;
+	case 1: GetOptionsMgr()->SaveOption(OPT_BLAME_SHOW_AUTHOR, visible); break;
+	case 2: GetOptionsMgr()->SaveOption(OPT_BLAME_SHOW_TIME, visible); break;
+	default: return;
+	}
+	if (m_pBlame != nullptr)
+		UpdateBlameLayout();
+}
+
+/**
+ * @brief How much accent is mixed into the gutter colour, in percent.
+ *
+ * The accent colours themselves are options, so a colour scheme decides how
+ * strong the tint reads; this only scales that choice.
+ */
+static constexpr int BLAME_TINT_PERCENT = 45;
+
+/**
+ * @brief Case folded author name used as the tint lookup key.
+ */
+static std::wstring BlameAuthorKey(const std::wstring& author)
+{
+	std::wstring key(author);
+	if (!key.empty())
+		::CharLowerBuffW(&key[0], static_cast<DWORD>(key.size()));
+	return key;
+}
+
+/**
+ * @brief Blend one accent tone into a base colour.
+ */
+static CEColor BlendBlameTint(CEColor base, int index)
+{
+	const COLORREF accent = BlameTint::GetColor(index % BlameTint::COUNT);
+	const int percent = BLAME_TINT_PERCENT;
+	auto mix = [percent](uint8_t from, uint8_t to) -> uint8_t
+	{
+		return static_cast<uint8_t>((from * (100 - percent) + to * percent) / 100);
+	};
+	return CEColor(mix(base.GetRVal(), GetRValue(accent)),
+		mix(base.GetGVal(), GetGValue(accent)),
+		mix(base.GetBVal(), GetBValue(accent)));
+}
+
+/**
+ * @brief Describe one pane for the blame dialog.
+ *
+ * Only the information the pane itself carries is filled in; the URL and
+ * revision of a temp export are borrowed from the other pane afterwards.
+ */
+static CBlamePane DescribeOwnBlamePane(CMergeDoc* pDoc, int pane)
+{
+	CBlamePane info;
+	if (pDoc == nullptr || pane < 0)
+		return info;
+
+	info.path = pDoc->GetPath(pane);
+	CMergeEditView* pView = pDoc->GetView(0, pane);
+	if (pView != nullptr)
+		info.totalLines = pView->GetLineCount();
+	if (info.path.empty() || !CBlameJob::IsInWorkingCopy(info.path))
+		return info;
+
+	std::wstring url, error;
+	if (CBlameJob::ResolveFileUrl(info.path, url, error))
+		info.hintUrl = url;
+	info.hintRevision = CBlameJob::QueryWorkingCopyRevision(info.path);
+	return info;
+}
+
+/**
+ * @brief Lend the repository URL of the pane that has one to the pane that has not.
+ *
+ * A diff of a modified file compares a temp export of BASE against the file
+ * itself, so only one of the two panes sits in a working copy.
+ */
+static void CrossFillBlameHints(CBlamePane& left, CBlamePane& right)
+{
+	if (left.hintUrl.empty() && !right.hintUrl.empty())
+	{
+		left.hintUrl = right.hintUrl;
+		left.hintRevision = right.hintRevision;
+	}
+	else if (right.hintUrl.empty() && !left.hintUrl.empty())
+	{
+		right.hintUrl = left.hintUrl;
+		right.hintRevision = left.hintRevision;
+	}
+}
+
+/**
+ * @brief Toggle the SVN blame gutter.
+ *
+ * Blame is fetched once and then kept in memory, so toggling it off and on
+ * again is inexpensive. Only one pane shows a gutter at a time; the dialog
+ * decides which one, because the file that carries working copy information is
+ * not always the one on the left.
+ */
+void CMergeEditView::ToggleBlame()
+{
+	CMergeDoc* pDoc = GetDocument();
+	if (pDoc == nullptr)
+		return;
+
+	const int rightIndex = (pDoc->m_nBuffers >= 2) ? pDoc->m_nBuffers - 1 : -1;
+
+	// Clear whatever pane is showing one before offering to start again.
+	for (int pane = pDoc->m_nBuffers - 1; pane >= 0; --pane)
+	{
+		CMergeEditView* pView = pDoc->GetView(0, pane);
+		if (pView != nullptr && pView->m_pBlame != nullptr)
+		{
+			pView->ClearBlame();
+			return;
+		}
+	}
+
+	CBlamePane panes[2];
+	panes[0] = DescribeOwnBlamePane(pDoc, 0);
+	if (rightIndex > 0)
+		panes[1] = DescribeOwnBlamePane(pDoc, rightIndex);
+	CrossFillBlameHints(panes[0], panes[1]);
+
+	CBlameDlg dlg(panes[0], panes[1]);
+	BlameTrace(L"ToggleBlame: left=%s url=%s rev=%d", panes[0].path.c_str(),
+		panes[0].hintUrl.c_str(), panes[0].hintRevision);
+	BlameTrace(L"ToggleBlame: right=%s url=%s rev=%d", panes[1].path.c_str(),
+		panes[1].hintUrl.c_str(), panes[1].hintRevision);
+	if (!dlg.DoModal(this))
+	{
+		BlameTrace(L"ToggleBlame: dialog cancelled");
+		return;
+	}
+
+	const int targetIndex = (dlg.GetPane() == 1) ? rightIndex : 0;
+	CMergeEditView* pTarget = (targetIndex > 0) ? pDoc->GetView(0, targetIndex) : this;
+	if (pTarget == nullptr)
+		pTarget = this;
+
+	pTarget->m_pBlame = dlg.GetResult();
+	if (pTarget->m_pBlame == nullptr)
+	{
+		BlameTrace(L"ToggleBlame: no result");
+		return;
+	}
+	pTarget->UpdateBlameLayout();
+
+	BlameTrace(L"ToggleBlame: pane=%d, %d lines, rev=%d author=%d time=%d",
+		targetIndex, static_cast<int>(pTarget->m_pBlame->lines.size()),
+		(int)pTarget->IsBlameColumnVisible(0), (int)pTarget->IsBlameColumnVisible(1),
+		(int)pTarget->IsBlameColumnVisible(2));
+}
+
+/**
+ * @brief Drop the blame data and give the gutter width back to the text.
+ */
+void CMergeEditView::ClearBlame()
+{
+	if (m_pBlame == nullptr)
+		return;
+	m_pBlame.reset();
+	UpdateBlameLayout();
+}
+
+/**
+ * @brief Rebuild the author to accent mapping from the loaded blame data.
+ *
+ * The gutter has always used a single background colour, which makes it hard
+ * to see where one author's work ends and the next one begins.  Each author
+ * now gets a slightly tinted gutter instead.  The author who wrote the most
+ * lines keeps the untouched colour: the bulk of a file usually belongs to one
+ * person, so leaving that part neutral keeps the view calm and only the
+ * minority contributions stand out.
+ */
+void CMergeEditView::UpdateBlameTints()
+{
+	m_blamePlainAuthor.clear();
+	m_blameTints.clear();
+
+	if (m_pBlame == nullptr)
+		return;
+
+	// Count the lines each author wrote. Author names are compared case
+	// insensitively because svn servers do not normalise them.
+	std::map<std::wstring, int> lineCounts;
+	for (const CBlameLine& line : m_pBlame->lines)
+	{
+		if (line.author.empty())
+			continue;
+		++lineCounts[BlameAuthorKey(line.author)];
+	}
+	if (lineCounts.empty())
+		return;
+
+	// Busiest author keeps the plain colour. Ties fall back to the alphabetical
+	// order of the map so the same blame data always looks the same.
+	auto plain = lineCounts.begin();
+	for (auto it = lineCounts.begin(); it != lineCounts.end(); ++it)
+	{
+		if (it->second > plain->second)
+			plain = it;
+	}
+	m_blamePlainAuthor = plain->first;
+
+	// Hand the accents out by line count, so the second and third biggest
+	// contributors get the two most clearly different tones.
+	std::vector<std::pair<int, std::wstring>> ranked;
+	ranked.reserve(lineCounts.size());
+	for (const auto& entry : lineCounts)
+	{
+		if (entry.first != m_blamePlainAuthor)
+			ranked.emplace_back(entry.second, entry.first);
+	}
+	std::stable_sort(ranked.begin(), ranked.end(),
+		[](const auto& a, const auto& b) { return a.first > b.first; });
+
+	for (size_t i = 0; i < ranked.size(); ++i)
+		m_blameTints[ranked[i].second] = static_cast<int>(i % BlameTint::COUNT);
+
+	BlameTrace(L"UpdateBlameTints: %d authors, plain=%s",
+		static_cast<int>(lineCounts.size()), m_blamePlainAuthor.c_str());
+}
+
+/**
+ * @brief Background colour of the gutter for one author.
+ *
+ * Selected lines are painted by the caller and never reach this function.
+ */
+CEColor CMergeEditView::GetBlameBackColor(const std::wstring& author) const
+{
+	const CEColor plain = GetColor(COLORINDEX_SELMARGIN);
+	if (author.empty())
+		return plain;
+
+	const std::wstring key = BlameAuthorKey(author);
+	if (key == m_blamePlainAuthor)
+		return plain;
+
+	const auto it = m_blameTints.find(key);
+	if (it == m_blameTints.end())
+		return plain;
+
+	return BlendBlameTint(plain, it->second);
+}
+
+/**
+ * @brief Recompute the blame column widths and relayout the view.
+ *
+ * The margin width takes part in the screen character count, so the horizontal
+ * scrollbar has to be recalculated whenever the gutter appears or disappears.
+ */
+void CMergeEditView::UpdateBlameLayout()
+{
+	m_nBlameRevChars = 4;
+	m_nBlameAuthorChars = 4;
+	m_nBlameTimeChars = 0;
+
+	if (m_pBlame != nullptr)
+	{
+		for (const CBlameLine& line : m_pBlame->lines)
+		{
+			const int revChars = (line.revision >= 0)
+				? static_cast<int>(std::to_wstring(line.revision).size()) + 1 : 1;
+			m_nBlameRevChars = (std::max)(m_nBlameRevChars, revChars);
+			m_nBlameAuthorChars = (std::max)(m_nBlameAuthorChars, static_cast<int>(line.author.size()));
+			m_nBlameTimeChars = (std::max)(m_nBlameTimeChars, static_cast<int>(line.when.size()));
+		}
+		m_nBlameRevChars = (std::min)(m_nBlameRevChars, 12);
+		m_nBlameAuthorChars = std::clamp(m_nBlameAuthorChars, 4, 16);
+	}
+
+	UpdateBlameTints();
+
+	if (m_pBlame != nullptr)
+	{
+		// Force one recalculation of the column widths with the current
+		// visibility, now that the data is known.
+		const int charWidth = GetCharWidth();
+		const int blameWidth = charWidth > 0 ? GetBlameColumnChars() * charWidth : 0;
+		BlameTrace(L"UpdateBlameLayout: chars=%d charWidth=%d width=%d",
+			GetBlameColumnChars(), charWidth, blameWidth);
+		SyncBlamePaneShift(blameWidth);
+
+		// The tooltip only covers the gutter, so it never gets in the way of
+		// the text itself.
+		CRect rcGutter;
+		GetClientRect(&rcGutter);
+		rcGutter.right = blameWidth;
+		if (m_blameTip.m_hWnd == nullptr)
+		{
+			if (m_blameTip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
+			{
+				m_blameTip.SetMaxTipWidth(600);
+
+				// TTF_SUBCLASS lets the control watch the mouse itself, which is
+				// what makes the standard hover delay work for a rect bound tool.
+				TOOLINFO toolInfo = {};
+				toolInfo.cbSize = sizeof(toolInfo);
+				toolInfo.hwnd = m_hWnd;
+				toolInfo.uId = 1;
+				toolInfo.uFlags = TTF_SUBCLASS;
+				toolInfo.hinst = AfxGetInstanceHandle();
+				toolInfo.lpszText = const_cast<LPTSTR>(_T(""));
+				toolInfo.rect = rcGutter;
+				m_blameTip.SendMessage(TTM_ADDTOOL, 0,
+					reinterpret_cast<LPARAM>(&toolInfo));
+			}
+		}
+		if (m_blameTip.m_hWnd != nullptr)
+		{
+			m_blameTip.SetToolRect(this, 1, &rcGutter);
+			m_blameTip.Activate(TRUE);
+		}
+		m_nBlameTipLine = -1;
+	}
+	else
+	{
+		SyncBlamePaneShift(0);
+		if (m_blameTip.m_hWnd != nullptr)
+		{
+			m_blameTip.Pop();
+			m_blameTip.Activate(FALSE);
+		}
+		m_nBlameTipLine = -1;
+	}
+
+	m_nTopSubLine = GetSubLineIndex(m_nTopLine);
+	RecalcHorzScrollBar();
+	InvalidateScreenRect();
+	UpdateCaret();
+}
+
+/**
+ * @brief Keep both panes the same size when the gutter appears or disappears.
+ *
+ * The gutter eats into the left pane only, which made the two panes look
+ * lopsided. Instead the splitter is moved so that the missing width is taken
+ * from both panes in equal parts.
+ * @param [in] blameWidth Width of the gutter in pixels, 0 when it is hidden.
+ */
+void CMergeEditView::SyncBlamePaneShift(int blameWidth)
+{
+	// The gutter eats into the pane that shows it, so the splitter moves towards
+	// that pane: right for the left pane, left for the right pane. Half the
+	// width each way leaves both panes the same size.
+	const int direction = (m_nThisPane == 0) ? 1 : -1;
+	const int desired = direction * (blameWidth / 2);
+	if (desired == m_nBlamePaneShift)
+		return;
+
+	auto* pSplitter = DYNAMIC_DOWNCAST(CSplitterWndEx, GetParent());
+	if (pSplitter == nullptr || pSplitter->GetColumnCount() != 2)
+		return;
+
+	CRect rcSplitter;
+	pSplitter->GetClientRect(&rcSplitter);
+	if (rcSplitter.Width() <= 0)
+		return;
+
+	const double delta = static_cast<double>(desired - m_nBlamePaneShift) / rcSplitter.Width();
+	const double ratio = pSplitter->GetSplitterRatio(0, true) + delta;
+
+	// A ratio computed from an uninitialised splitter can land at the edges;
+	// refusing those keeps the panes from collapsing.
+	if (ratio <= 0.05 || ratio >= 0.95)
+	{
+		BlameTrace(L"SyncBlamePaneShift: refused ratio=%f (splitter=%d)", ratio, rcSplitter.Width());
+		return;
+	}
+
+	const double ratios[1] = { ratio };
+	pSplitter->SetSplitterRatios(ratios, 1, true);
+	m_nBlamePaneShift = desired;
+
+	int w0 = 0, w1 = 0, wmin = 0;
+	pSplitter->GetColumnInfo(0, w0, wmin);
+	pSplitter->GetColumnInfo(1, w1, wmin);
+	BlameTrace(L"SyncBlamePaneShift: shift=%d splitter=%d ratio=%f panes=%d/%d",
+		desired, rcSplitter.Width(), ratio, w0, w1);
+}
+
+/**
+ * @brief Buffer line shown at a client point.
+ * @return The line index, or -1 when the point is outside the text area.
+ */
+int CMergeEditView::BlameLineFromPoint(CPoint point)
+{
+	const int lineHeight = GetLineHeight();
+	if (lineHeight <= 0 || point.y < 0)
+		return -1;
+
+	int line = -1;
+	int subLineInLine = 0;
+	GetLineBySubLine(m_nTopSubLine + point.y / lineHeight, line, subLineInLine);
+	return line;
+}
+
+/**
+ * @brief Keep the gutter tooltip pointed at the row under the cursor.
+ *
+ * The gutter is often narrowed down to one or two columns, so hovering it must
+ * still reveal all three values.
+ */
+void CMergeEditView::UpdateBlameTooltip(CPoint point)
+{
+	if (m_pBlame == nullptr || m_blameTip.m_hWnd == nullptr)
+	{
+		m_nBlameTipLine = -1;
+		return;
+	}
+
+	const int charWidth = GetCharWidth();
+	if (charWidth <= 0 || point.x < 0 || point.x >= GetBlameColumnChars() * charWidth)
+	{
+		m_nBlameTipLine = -1;
+		return;
+	}
+
+	const int line = BlameLineFromPoint(point);
+	if (line == m_nBlameTipLine)
+		return;
+	m_nBlameTipLine = line;
+	BlameTrace(L"UpdateBlameTooltip: x=%d y=%d line=%d", point.x, point.y, line);
+
+	if (line < 0 || (GetLineFlags(line) & LF_GHOST))
+		return;
+	const int realLine = ComputeRealLine(line);
+	if (realLine < 0 || realLine >= static_cast<int>(m_pBlame->lines.size()))
+		return;
+
+	const CBlameLine& info = m_pBlame->lines[static_cast<size_t>(realLine)];
+	if (info.revision < 0 && info.author.empty())
+		return;
+
+	const std::wstring revision = (info.revision >= 0)
+		? L"r" + std::to_wstring(info.revision) : std::wstring(L"local change");
+	const std::wstring author = info.author.empty() ? std::wstring(L"-") : info.author;
+	const std::wstring when = info.when.empty() ? std::wstring(L"-") : info.when;
+
+	wchar_t text[512] = {};
+	swprintf_s(text, L"Revision: %s\nAuthor: %s\nDate: %s",
+		revision.c_str(), author.c_str(), when.c_str());
+	m_blameTip.UpdateTipText(text, this, 1);
+
+	// The control's own hover timer does not run for a tool that is bound to a
+	// rectangle this way, so the tip is shown as soon as the row under the
+	// cursor changes. It is popped again when the cursor leaves the gutter.
+	m_blameTip.Popup();
+}
+
+/**
+ * @brief Reserve gutter space for the blame columns.
+ */
+int CMergeEditView::GetMarginWidth(CDC* pdc)
+{
+	const int baseWidth = CGhostTextView::GetMarginWidth(pdc);
+
+	// Printing never shows blame; it would only eat page width.
+	if (m_pBlame == nullptr || (pdc != nullptr && pdc->IsPrinting()))
+		return baseWidth;
+
+	const int charWidth = GetCharWidth();
+	if (charWidth <= 0)
+		return baseWidth;
+
+	return baseWidth + GetBlameColumnChars() * charWidth;
+}
+
+/**
+ * @brief Draw the blame columns to the left of the normal margin content.
+ *
+ * The base class paints the selection margin, the icons and the line numbers.
+ * It is given a rectangle whose left edge is moved right by the width of the
+ * blame band, which keeps everything it draws clear of the blame text.
+ */
+void CMergeEditView::DrawMargin(const CRect& rect, int nLineIndex, int nLineNumber)
+{
+	const int charWidth = GetCharWidth();
+	const bool showBlame = (m_pBlame != nullptr && !m_pBlame->lines.empty() && charWidth > 0);
+	const int blameWidth = showBlame ? GetBlameColumnChars() * charWidth : 0;
+
+	CRect rcBase(rect);
+	rcBase.left += blameWidth;
+	CGhostTextView::DrawMargin(rcBase, nLineIndex, nLineNumber);
+
+	if (!showBlame)
+		return;
+
+	const CRect rcBlame(rect.left, rect.top, rect.left + blameWidth, rect.bottom);
+
+	// Lines that carry any selected text are painted in the editor's selection
+	// colour, so the gutter follows a drag exactly like the text next to it.
+	const auto [ptSelStart, ptSelEnd] = GetSelection();
+	bool selectedLine = false;
+	if (ptSelStart != ptSelEnd && nLineIndex >= ptSelStart.y && nLineIndex <= ptSelEnd.y)
+	{
+		// A selection ending at column 0 of its last line does not cover that
+		// line, which is also how the editor paints it.
+		selectedLine = !(nLineIndex == ptSelEnd.y && ptSelEnd.x == 0 &&
+			ptSelEnd.y > ptSelStart.y);
+	}
+
+	const CEColor backColor = GetColor(
+		selectedLine ? COLORINDEX_SELBKGND : COLORINDEX_SELMARGIN);
+	const CEColor textColor = GetColor(
+		selectedLine ? COLORINDEX_SELTEXT : COLORINDEX_NORMALTEXT);
+
+	// Ghost lines have no counterpart in the file, so nothing to blame. They
+	// get neither blame text nor an author tint.
+	const CBlameLine* pLine = nullptr;
+	if (nLineIndex >= 0 && (GetLineFlags(nLineIndex) & LF_GHOST) == 0)
+	{
+		const int realLine = ComputeRealLine(nLineIndex);
+		if (realLine >= 0 && realLine < static_cast<int>(m_pBlame->lines.size()))
+			pLine = &m_pBlame->lines[static_cast<size_t>(realLine)];
+	}
+
+	// The band is tinted per author so neighbouring contributions can be told
+	// apart; a selected line keeps the selection colour so a drag still shows.
+	const CEColor bandColor = (!selectedLine && pLine != nullptr)
+		? GetBlameBackColor(pLine->author) : backColor;
+
+	m_pCrystalRenderer->SetBkColor(bandColor);
+	m_pCrystalRenderer->FillRectangle(rcBlame);
+
+	if (pLine == nullptr)
+		return;
+
+	const CBlameLine& line = *pLine;
+	if (line.revision < 0 && line.author.empty())
+		return;
+
+	auto fit = [](std::wstring text, int chars) -> std::wstring
+	{
+		if (chars <= 0)
+			return std::wstring();
+		if (static_cast<int>(text.size()) > chars)
+		{
+			text.resize(static_cast<size_t>(chars));
+			text[static_cast<size_t>(chars) - 1] = L'\u2026';
+		}
+		return text;
+	};
+
+	const std::wstring revText = fit(
+		(line.revision >= 0) ? L"r" + std::to_wstring(line.revision) : std::wstring(L"-"),
+		m_nBlameRevChars);
+	const std::wstring authorText = fit(line.author, m_nBlameAuthorChars);
+	const std::wstring timeText = fit(line.when, m_nBlameTimeChars);
+
+	// The base class may leave the bold or italic variant selected for the line
+	// number, which made the blame text change shape when a line was selected.
+	// The gutter therefore always draws with the plain font.
+	m_pCrystalRenderer->SwitchFont(false, false);
+	m_pCrystalRenderer->SetTextColor(textColor);
+
+	const int y = rect.top;
+	int x = rect.left;
+
+	x += BLAME_PADDING_CHARS * charWidth;
+
+	// FillSolidRect() leaves the DC background colour set to the colour it just
+	// painted, and DrawText() fills its rectangle with that same colour. The
+	// base class paints revision marks that way, so the cell colour has to be
+	// set here or the blame text fills in whatever was painted last.
+	m_pCrystalRenderer->SetBkColor(bandColor);
+
+	auto drawColumn = [&](bool visible, const std::wstring& text, int chars)
+	{
+		if (visible)
+		{
+			if (!text.empty())
+			{
+				const CRect rcColumn(x, rect.top, x + chars * charWidth, rect.bottom);
+				std::vector<int> widths(text.size(), charWidth);
+				m_pCrystalRenderer->DrawText(x, y, rcColumn, text.c_str(),
+					static_cast<int>(text.size()), widths.data());
+			}
+			x += (chars + 1) * charWidth;
+		}
+	};
+
+	drawColumn(IsBlameColumnVisible(0), revText, m_nBlameRevChars);
+	drawColumn(IsBlameColumnVisible(1), authorText, m_nBlameAuthorChars);
+	drawColumn(IsBlameColumnVisible(2), timeText, m_nBlameTimeChars);
+}
+
+/**
+ * @brief Show or hide blame for the left pane.
+ */
+void CMergeEditView::OnViewBlame()
+{
+	CMergeDoc* pDoc = GetDocument();
+	if (pDoc == nullptr)
+		return;
+
+	// Blame belongs to the first (left) pane only.
+	CMergeEditView* pLeftView = pDoc->GetView(0, 0);
+	if (pLeftView == nullptr)
+		return;
+	pLeftView->ToggleBlame();
+}
+
+/**
+ * @brief Update the View > Blame menu item and the toolbar button.
+ */
+void CMergeEditView::OnUpdateViewBlame(CCmdUI* pCmdUI)
+{
+	CMergeDoc* pDoc = GetDocument();
+	CMergeEditView* pLeftView = (pDoc != nullptr) ? pDoc->GetView(0, 0) : nullptr;
+	pCmdUI->Enable(pLeftView != nullptr);
+	pCmdUI->SetCheck(pLeftView != nullptr && pLeftView->IsBlameVisible());
+}
+
+/**
+ * @brief Map a View > Blame column menu id to a column index.
+ */
+static int BlameColumnFromCommand(UINT nID)
+{
+	switch (nID)
+	{
+	case ID_VIEW_BLAME_REV:    return 0;
+	case ID_VIEW_BLAME_AUTHOR: return 1;
+	case ID_VIEW_BLAME_TIME:   return 2;
+	default:                   return -1;
+	}
+}
+
+/**
+ * @brief Show or hide one blame column without downloading the data again.
+ */
+void CMergeEditView::OnViewBlameColumn(UINT nID)
+{
+	CMergeDoc* pDoc = GetDocument();
+	CMergeEditView* pLeftView = (pDoc != nullptr) ? pDoc->GetView(0, 0) : nullptr;
+	if (pLeftView == nullptr)
+		return;
+
+	const int column = BlameColumnFromCommand(nID);
+	if (column < 0)
+		return;
+
+	pLeftView->SetBlameColumnVisible(column, !pLeftView->IsBlameColumnVisible(column));
+}
+
+/**
+ * @brief Check the View > Blame column items according to the gutter state.
+ */
+void CMergeEditView::OnUpdateViewBlameColumn(CCmdUI* pCmdUI)
+{
+	CMergeDoc* pDoc = GetDocument();
+	CMergeEditView* pLeftView = (pDoc != nullptr) ? pDoc->GetView(0, 0) : nullptr;
+	if (pLeftView == nullptr)
+	{
+		pCmdUI->Enable(false);
+		return;
+	}
+
+	const int column = BlameColumnFromCommand(static_cast<UINT>(pCmdUI->m_nID));
+	const bool known = (column >= 0);
+	pCmdUI->Enable(pLeftView->IsBlameVisible() && known);
+	if (known)
+		pCmdUI->SetCheck(pLeftView->IsBlameColumnVisible(column));
+}
+
 
 /**
  * @brief Enable/Disable view's top margins.

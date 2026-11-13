@@ -52,6 +52,7 @@
 #include "LanguageSelect.h"
 #include "OptionsDef.h"
 #include "MergeCmdLineInfo.h"
+#include "BlameGutter.h"
 #include "ConflictFileParser.h"
 #include "JumpList.h"
 #include "stringdiffs.h"
@@ -966,6 +967,28 @@ static PathContext AdjustFileFolderPaths(const PathContext& paths)
 	return pathsAdjusted;
 }
 
+/**
+ * @brief Forward the -burl and -brev overrides to the SVN blame engine.
+ *
+ * Diffs launched from the TortoiseSVN log dialog are exported to the temp
+ * folder, so the file is not inside a working copy and the repository URL
+ * cannot be derived locally. TortoiseSVN passes the original URL with %burl and
+ * the shown revision with %brev; WinMerge receives them as -burl <url> and
+ * -brev <rev> and remembers them for the left pane so the blame dialog can
+ * query the repository directly at the right revision.
+ * @param [in] cmdInfo Commandline parameters info.
+ * @param [in] paths Left/middle/right paths of the comparison.
+ */
+static void RegisterBlameUrl(const MergeCmdLineInfo& cmdInfo, const PathContext& paths)
+{
+	if (paths.GetSize() < 1)
+		return;
+	if (!cmdInfo.m_sLeftBlameUrl.empty())
+		CBlameJob::RegisterRepositoryUrl(paths[0], cmdInfo.m_sLeftBlameUrl);
+	if (cmdInfo.m_nLeftBlameRevision > 0)
+		CBlameJob::RegisterRepositoryRevision(paths[0], cmdInfo.m_nLeftBlameRevision);
+}
+
 /** @brief Read command line arguments and open files for comparison.
  *
  * The name of the function is a legacy code from the time that this function
@@ -1083,6 +1106,7 @@ bool CMergeApp::ParseArgsAndDoOpen(MergeCmdLineInfo& cmdInfo, CMainFrame* pMainF
 		if (cmdInfo.m_Files.GetSize() > 2)
 		{
 			PathContext paths = AdjustFileFolderPaths(cmdInfo.m_Files);
+			RegisterBlameUrl(cmdInfo, paths);
 			fileopenflags_t dwFlags[3] = {cmdInfo.m_dwLeftFlags, cmdInfo.m_dwMiddleFlags, cmdInfo.m_dwRightFlags};
 			bCompared = pMainFrame->DoFileOrFolderOpen(&paths,
 				dwFlags, strDesc, cmdInfo.m_sReportFile, nullptr,
@@ -1091,6 +1115,7 @@ bool CMergeApp::ParseArgsAndDoOpen(MergeCmdLineInfo& cmdInfo, CMainFrame* pMainF
 		else if (cmdInfo.m_Files.GetSize() > 1)
 		{
 			PathContext paths = AdjustFileFolderPaths(cmdInfo.m_Files);
+			RegisterBlameUrl(cmdInfo, paths);
 			fileopenflags_t dwFlags[3] = {cmdInfo.m_dwLeftFlags, cmdInfo.m_dwRightFlags, FFILEOPEN_NONE};
 			bCompared = pMainFrame->DoFileOrFolderOpen(&paths,
 				dwFlags, strDesc, cmdInfo.m_sReportFile, nullptr,
